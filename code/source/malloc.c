@@ -94,12 +94,6 @@ void* malloc_cust(size_t bytes) {
             */
             i = (i << 1) * (info & 1) + 1;
             if (i == target) {
-                // set bits to 0, signify taken
-
-                // j shifts wrong amount, for 27 bytes, havd 
-                // 1...11110000111
-                // should subtract number of 0's long minus 1 from j. ie
-                // i << (j - (bytes / MINI_BLOCK_SIZE))
                 unsigned char j_shift = bytes / MINI_BLOCK_SIZE;
                 *(uintptr_t*)current = ~(i << (j - j_shift)) & *(uintptr_t*)current;
                 return current + MINI_BLOCK_SIZE * j_shift;
