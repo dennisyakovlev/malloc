@@ -1,3 +1,4 @@
 #pragma once
+#include <stddef.h>
 
-void* malloc_cust(int);
+void* malloc_cust(size_t);
