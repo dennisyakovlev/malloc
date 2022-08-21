@@ -20,23 +20,13 @@
 
 struct MallocAdjustables
 {
-    // default size of block, without block meta data
-    size_t blk_sz;
-
-    // amount of more memory to request at a time
+    // minimum amount of more memory to request at a time
     size_t more_mem;
+
+    // 
+    size_t cache_sz;
 };
 
 void* my_malloc(size_t);
 
 void my_free(void*);
-
-size_t malloc_get_block_size();
-
-size_t malloc_get_more_mem();
-
-// following impl are sort of hard, do we lock everything?
-
-void malloc_set_block_size();
-
-void malloc_set_more_mem();
