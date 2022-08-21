@@ -188,7 +188,7 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
 
     // Assume: bytes < block.max_free
 
-    void* to_ret = block->max_free_ptr + sizeof(void*);
+    void* to_ret = (char*)block->max_free_ptr + sizeof(void*);
 
     MY_MALLOC_FREE_INUSE(block->max_free_ptr);
     size_t remaining = block->max_free - bytes;
@@ -260,7 +260,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     _block* block = NULL;
     while (*mapping)
     {
-        block = (*mapping)->start;
+        block = (*mapping)->start_block;
 
         while (block)
         {
@@ -316,6 +316,7 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     return _block_alloc_unsafe((_block*)where, bytes);
 }
 
+// should be _mapping**
 void*  _mapping_block_create(size_t bytes, _mapping* mapping)
 {
     // add block onto existing mapping if can, otherwise create
@@ -341,12 +342,6 @@ void*  _mapping_block_create(size_t bytes, _mapping* mapping)
 
 // currently get working with single threaded
 
-// mapping, block, result
-// yes      no     create block onto mapping OR new mapping
-// yes      yes    allocate onto block
-// no       no     new mapping
-// no       yes    not possible
-
 void*  my_malloc(size_t bytes)
 {
     // allocate bytes somewhere on the heap
@@ -362,7 +357,7 @@ void*  my_malloc(size_t bytes)
 
     if (!mapping)
     {
-        return _mapping_create(bytes, &mapping);
+        return _mapping_create(bytes, &G_global.start_map);
     }
 
     return _mapping_block_create(bytes, mapping);
