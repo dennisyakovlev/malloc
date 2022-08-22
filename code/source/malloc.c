@@ -81,9 +81,11 @@ typedef struct MallocAdjustables _vars;
 #if SIZE_MAX == 0xffffffff
     #define MY_MALLOC_BIT_SIZE 0xffff
     #define MY_MALLOC_BIT_FREE 0x10000
+    #define MY_MALLOC_SHIFTER 0x80000000
 #elif SIZE_MAX == 0xffffffffffffffff
     #define MY_MALLOC_BIT_SIZE 0xffffffff
     #define MY_MALLOC_BIT_FREE 0x100000000
+    #define MY_MALLOC_SHIFTER 0x8000000000000000
 #else
     static_assert(0, "not 32 or 64 bit system");
 #endif
@@ -171,13 +173,18 @@ size_t _mem_more_sz(size_t bytes)
 {
     // determine number of new bytes which will be allocated
     
+    // Note: function will return 1 if bytes has the highest
+    //       bit set on the platform
+    //       ie: on 32 bit if bytes >= 2^31
+    //           on 64 but if bytes >= 2^63  
+
     if (bytes < G_vars.more_mem)
     {
         return G_vars.more_mem;
     }
 
     // lowest power of 2 greater than bytes
-    return 1 << (__builtin_clzl(bytes | 1) - 1);
+    return MY_MALLOC_SHIFTER >> (__builtin_clzl(bytes) - 1);
 }
 
 void*  _block_alloc_unsafe(_block* block, size_t bytes)
@@ -257,22 +264,21 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     // try to get a block with enough bytes
     // return block if found, otherwise null
 
-    _block* block = NULL;
-    while (*mapping)
+    if (*mapping)
     {
-        block = (*mapping)->start_block;
-
-        while (block)
+        _block* block = (*mapping)->start_block;
+        do
         {
-            if (bytes <= block->max_free)
+            while (block)
             {
-                return block;
+                if (bytes <= block->max_free)
+                {
+                    return block;
+                }
+
+                block = block->next;
             }
-
-            block = block->next;
-        }
-
-        *mapping = (*mapping)->next;
+        } while ((*mapping)->next);        
     }
 
     return NULL;
@@ -316,28 +322,27 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     return _block_alloc_unsafe((_block*)where, bytes);
 }
 
-// should be _mapping**
-void*  _mapping_block_create(size_t bytes, _mapping* mapping)
+void*  _mapping_block_create(size_t bytes, _mapping** mapping)
 {
     // add block onto existing mapping if can, otherwise create
     // new mapping
     // return start of allocation
 
-    _block* end_block = mapping->end_block;
+    _block* end_block = (*mapping)->end_block;
     void* where = (char*)end_block + sizeof(_block) + end_block->sz; 
     size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
 
-    if (block_sz > (char*)mapping->end - (char*)where)
+    if (block_sz > (char*)(*mapping)->end - (char*)where)
     {
-        _mapping* new_map = NULL;
-        void* res = _mapping_create(bytes, &new_map);
-        mapping->next = new_map;
-        return res;
+        return _mapping_create(bytes, &(*mapping)->next);
     }
 
-    // create block, allocate, return
+    _block_create_unsafe(block_sz, where);
 
+    (*mapping)->end_block = (_block*)where;
+    end_block->next = (_block*)where;
 
+    return _block_alloc_unsafe((_block*)where, bytes);
 }
 
 // currently get working with single threaded
@@ -360,7 +365,7 @@ void*  my_malloc(size_t bytes)
         return _mapping_create(bytes, &G_global.start_map);
     }
 
-    return _mapping_block_create(bytes, mapping);
+    return _mapping_block_create(bytes, &mapping);
 }
 
 void my_free(void* ptr)
