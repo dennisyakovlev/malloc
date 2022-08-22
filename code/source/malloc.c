@@ -116,7 +116,7 @@ typedef struct MallocAdjustables _vars;
 
 // how many bytes do i want my block to take
 #define MY_MALLOC_BLOCK_EXPANSION(sz) \
-    (sz | 1024) + sizeof(_block)
+    (sz | 1024) + sizeof(_block) + sizeof(size_t)
 
 static _global G_global =
 {
