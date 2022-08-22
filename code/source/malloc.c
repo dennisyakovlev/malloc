@@ -125,7 +125,8 @@ static _global G_global =
 
 static _vars G_vars =
 {
-    .more_mem = 4096
+    .more_mem = 1048576,
+    .cache_sz = 1024
 };
 
 static _lock G_lock =
@@ -185,6 +186,7 @@ size_t _mem_more_sz(size_t bytes)
 
     // lowest power of 2 greater than bytes
     return MY_MALLOC_SHIFTER >> (__builtin_clzl(bytes) - 1);
+    // return MY_MALLOC_SHIFTER >> (__builtin_clzl(bytes) - 1);
 }
 
 void*  _block_alloc_unsafe(_block* block, size_t bytes)
@@ -264,22 +266,39 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     // try to get a block with enough bytes
     // return block if found, otherwise null
 
-    if (*mapping)
-    {
-        _block* block = (*mapping)->start_block;
-        do
-        {
-            while (block)
-            {
-                if (bytes <= block->max_free)
-                {
-                    return block;
-                }
+    // Note: never want *mapping to be set to NULL
+    //       unless is was passed as null
 
-                block = block->next;
-            }
-        } while ((*mapping)->next);        
+    if (!(*mapping))
+    {
+        return NULL;
     }
+
+    _block* block = (*mapping)->start_block;
+    while (block)
+    {
+        if (bytes <= block->max_free)
+        {
+            return block;
+        }
+
+        block = block->next;
+    }
+
+    while((*mapping)->next)
+    {
+        while (block)
+        {
+            if (bytes <= block->max_free)
+            {
+                return block;
+            }
+
+            block = block->next;
+        }
+
+        *mapping = (*mapping)->next;
+    }        
 
     return NULL;
 }
