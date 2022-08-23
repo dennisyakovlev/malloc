@@ -27,7 +27,7 @@ code:
 %.o: %.c
 	$(CC) $(FLAGS) -Icode/include -c -o $(BUILDIR)/$@ $^ -L$(BUILDIR)/code -lmemory
 
-tests: 
+tests: debug_flags
 	@$(MAKE) -C $@
 
 clean:
