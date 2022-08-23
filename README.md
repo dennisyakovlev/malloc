@@ -1,2 +1,2 @@
 # malloc
-C memory function implementations from scratch 
+Custom memory function implementation for C 
