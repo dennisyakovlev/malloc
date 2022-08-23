@@ -1,6 +1,6 @@
 # statically link into every test, allowing for easy debugging
 
-DIRS=basic
+DIRS=basic less_basic
 
 all: directory tests 
 

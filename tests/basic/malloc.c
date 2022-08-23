@@ -3,6 +3,7 @@
 int main(int argc, char const *argv[])
 {
     int* res = my_malloc(sizeof(int));
+    
     *res = 8;
 
     if (*res != 8)

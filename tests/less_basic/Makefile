@@ -1,5 +1,5 @@
-OBJECTS=malloc free
-CURRDIR=$(BUILDIR)/tests/basic
+OBJECTS=loop large
+CURRDIR=$(BUILDIR)/tests/less_basic
 
 all: directory tests
 
