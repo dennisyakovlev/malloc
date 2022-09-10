@@ -108,12 +108,12 @@ typedef struct MallocAdjustables _vars;
 #define MY_MALLOC_SIZE_SET(VOID_PTR, SIZE) \
     *((size_t*)(VOID_PTR)) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + (SIZE)
 
-#define MY_BLOCK_INITIAL_ALLOC(VOID_PTR) \
-    ((char*)(VOID_PTR) + sizeof(_block) + sizeof(void*))
+// meta data per allocation
+#define MY_MALLOC_ALLOC_META (sizeof(size_t))
 
 // how many bytes do i want my block to take
 #define MY_MALLOC_BLOCK_EXPANSION(sz) \
-    (((sz) | 1024) + sizeof(_block) + sizeof(size_t))
+    (((sz) | 1024) + sizeof(_block) + MY_MALLOC_ALLOC_META)
 
 static _global G_global =
 {
@@ -190,7 +190,7 @@ int    _block_has_room(size_t bytes, _block* block)
     // whether block has enough room for bytes
     // return 0 is yes, 1 otherwise
 
-    return block->max_free - sizeof(size_t) >= bytes;
+    return block->max_free - MY_MALLOC_ALLOC_META >= bytes;
 }
 
 void*  _block_alloc_unsafe(_block* block, size_t bytes)
@@ -201,10 +201,10 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
 
     // Assume: bytes < block.max_free - sizeof(size_t)
 
-    void* to_ret = (char*)block->max_free_ptr + sizeof(size_t);
+    void* to_ret = (char*)block->max_free_ptr + MY_MALLOC_ALLOC_META;
 
     MY_MALLOC_FREE_INUSE(block->max_free_ptr);
-    size_t remaining = block->max_free - bytes - sizeof(size_t);
+    size_t remaining = block->max_free - bytes - MY_MALLOC_ALLOC_META;
 
     MY_MALLOC_SIZE_SET(block->max_free_ptr, bytes);
 
@@ -218,13 +218,13 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
     }
 
     // add another space for potential allocation
-    void* after_insert = (char*)block->max_free_ptr + bytes + sizeof(size_t);
+    void* after_insert = (char*)block->max_free_ptr + bytes + MY_MALLOC_ALLOC_META;
     MY_MALLOC_FREE_CLEAR(after_insert);
     MY_MALLOC_SIZE_SET(after_insert, remaining);
 
     // get new largest allocatable size for block
 
-    void* curr = (void*)(block + 1);
+    void* curr = block + 1;
     size_t i = 0;
     while (i < block->sz)
     {
