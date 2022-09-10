@@ -199,14 +199,12 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
     // allocation in block
     // return the start of allocation
 
-    // Assume: bytes < block.max_free
+    // Assume: bytes < block.max_free - sizeof(size_t)
 
-    void* to_ret = (char*)block->max_free_ptr + sizeof(size_t); // NOTE: CORRECT?
-                                                               // should be + sizeof(size_t*)?
+    void* to_ret = (char*)block->max_free_ptr + sizeof(size_t);
 
     MY_MALLOC_FREE_INUSE(block->max_free_ptr);
-    size_t remaining = block->max_free - bytes - sizeof(size_t); // NOTE: CORRECT?
-                                                // should be - bytes - sizeof(void*) or size_t* thing
+    size_t remaining = block->max_free - bytes - sizeof(size_t);
 
     MY_MALLOC_SIZE_SET(block->max_free_ptr, bytes);
 
@@ -220,9 +218,9 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
     }
 
     // add another space for potential allocation
-    void* after_insert = (char*)block->max_free_ptr + bytes + sizeof(size_t); // NOTE: same as 197
+    void* after_insert = (char*)block->max_free_ptr + bytes + sizeof(size_t);
     MY_MALLOC_FREE_CLEAR(after_insert);
-    MY_MALLOC_SIZE_SET(after_insert, remaining); // NOTE: this sets incorrectly
+    MY_MALLOC_SIZE_SET(after_insert, remaining);
 
     // get new largest allocatable size for block
 
