@@ -1,15 +1,13 @@
-/*  Organize the heap into linked list of blocks. Each block is linked list
-    with a pointer to largest amount of allocatable memory.
+/*  Organize the heap into linked list of mmap'ed mappings. Each mapping has a
+    linked list of blocks. Each block is a linked list of allocations.
 
-    First fit strategy is used.
+    An allocation causes a searching all three levels of linked lists. A first fit
+    strategy is used for allocations. Once a space is found in a block, the space
+    gets set to taken and the entire block is interated over to update meta data.
 
-    Allocating memory requires searching for first block with enough space
-    to hold requested bytes. Then requires searching entire block for to
-    set the new largest allocatable number of bytes.
-
-    Requesting time can be as bad a linear in terms of number of blocks,
-    but as good as near "constant" if the hints are good.
-        NOTE: need a good way to make hints, tree? 
+    Freeing memory sets the previously allocated space to free, without updating
+    the block metadata. The metadata can only be updated when another allocation
+    is put in the block.
 */
 
 #include <custom_mem/malloc.h>
@@ -42,7 +40,7 @@ typedef struct MallocMapping
     // start of this mapping
     void* start;
 
-    // end of heap
+    // end of this mapping
     void* end;
 }
 _mapping;
@@ -52,12 +50,11 @@ typedef struct MallocBlock
     // maximum contiguous number of free allocatable bytes
     size_t max_free;
 
-    // size in bytes of storage this block takes, without block meta data,
-    // including allocation meta data
+    // size in bytes of storage this block takes
     size_t sz;
 
     // whether being modified currently
-    volatile atomic_char is_free; // 1 free, 0 not free
+    volatile atomic_char is_free;
 
     // next block
     struct MallocBlock* next;
@@ -97,26 +94,26 @@ typedef struct MallocAdjustables _vars;
 // 1 -> free
 // 0 -> in use 
 #define MY_MALLOC_IS_FREE(VOID_PTR) \
-    !(*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE)
+    !(*((size_t*)(VOID_PTR)) & MY_MALLOC_BIT_FREE)
 
 #define MY_MALLOC_SIZE_GET(VOID_PTR) \
-    (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_SIZE)
+    (*((size_t*)(VOID_PTR)) & MY_MALLOC_BIT_SIZE)
 
 #define MY_MALLOC_FREE_INUSE(VOID_PTR) \
-    *((size_t*)VOID_PTR) |= MY_MALLOC_BIT_FREE
+    *((size_t*)(VOID_PTR)) |= MY_MALLOC_BIT_FREE
 
 #define MY_MALLOC_FREE_CLEAR(VOID_PTR) \
-    *((size_t*)VOID_PTR) &= MY_MALLOC_BIT_SIZE
+    *((size_t*)(VOID_PTR)) &= MY_MALLOC_BIT_SIZE
 
 #define MY_MALLOC_SIZE_SET(VOID_PTR, SIZE) \
-    *((size_t*)VOID_PTR) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + SIZE
+    *((size_t*)(VOID_PTR)) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + (SIZE)
 
 #define MY_BLOCK_INITIAL_ALLOC(VOID_PTR) \
-    ((char*)VOID_PTR + sizeof(_block) + sizeof(void*))
+    ((char*)(VOID_PTR) + sizeof(_block) + sizeof(void*))
 
 // how many bytes do i want my block to take
 #define MY_MALLOC_BLOCK_EXPANSION(sz) \
-    (sz | 1024) + sizeof(_block) + sizeof(size_t)
+    (((sz) | 1024) + sizeof(_block) + sizeof(size_t))
 
 static _global G_global =
 {
@@ -186,7 +183,14 @@ size_t _mem_more_sz(size_t bytes)
 
     // lowest power of 2 greater than bytes
     return MY_MALLOC_SHIFTER >> (__builtin_clzl(bytes) - 1);
-    // return MY_MALLOC_SHIFTER >> (__builtin_clzl(bytes) - 1);
+}
+
+int    _block_has_room(size_t bytes, _block* block)
+{
+    // whether block has enough room for bytes
+    // return 0 is yes, 1 otherwise
+
+    return block->max_free - sizeof(size_t) >= bytes;
 }
 
 void*  _block_alloc_unsafe(_block* block, size_t bytes)
@@ -197,17 +201,18 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
 
     // Assume: bytes < block.max_free
 
-    void* to_ret = (char*)block->max_free_ptr + sizeof(void*);
+    void* to_ret = (char*)block->max_free_ptr + sizeof(size_t); // NOTE: CORRECT?
+                                                               // should be + sizeof(size_t*)?
 
     MY_MALLOC_FREE_INUSE(block->max_free_ptr);
-    size_t remaining = block->max_free - bytes;
+    size_t remaining = block->max_free - bytes - sizeof(size_t); // NOTE: CORRECT?
+                                                // should be - bytes - sizeof(void*) or size_t* thing
+
+    MY_MALLOC_SIZE_SET(block->max_free_ptr, bytes);
 
     if (remaining <= 64) // should be greater than fast cache
     {
         // no more room in block
-
-        MY_MALLOC_SIZE_SET(block->max_free_ptr, block->max_free);
-
         block->max_free = 0;
         block->max_free_ptr = NULL;
 
@@ -215,12 +220,9 @@ void*  _block_alloc_unsafe(_block* block, size_t bytes)
     }
 
     // add another space for potential allocation
-
-    MY_MALLOC_SIZE_SET(block->max_free_ptr, bytes);
-
-    void* after_insert = (char*)block->max_free_ptr + bytes + sizeof(void*);
+    void* after_insert = (char*)block->max_free_ptr + bytes + sizeof(size_t); // NOTE: same as 197
     MY_MALLOC_FREE_CLEAR(after_insert);
-    MY_MALLOC_SIZE_SET(after_insert, remaining);
+    MY_MALLOC_SIZE_SET(after_insert, remaining); // NOTE: this sets incorrectly
 
     // get new largest allocatable size for block
 
@@ -248,15 +250,13 @@ void   _block_create_unsafe(size_t sz, void* where)
     // create a block of sz starting the block on where
     // return the total number of bytes taken
 
-    // Assume: sz > minimum required total block size
-
     _block new_block =
     {
-        .sz           = sz - sizeof(_block),
+        .sz           = sz,
         .is_free      = 1,
         .next         = NULL,
         .max_free_ptr = (char*)where + sizeof(_block),
-        .max_free     = sz - sizeof(_block) - sizeof(void*)
+        .max_free     = sz - sizeof(_block)
     };
     *(_block*)where = new_block;
 }
@@ -277,7 +277,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     _block* block = (*mapping)->start_block;
     while (block)
     {
-        if (bytes <= block->max_free)
+        if (!_block_has_room(bytes, block))
         {
             return block;
         }
@@ -289,7 +289,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     {
         while (block)
         {
-            if (bytes <= block->max_free)
+            if (!_block_has_room(bytes, block))
             {
                 return block;
             }
@@ -332,7 +332,7 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
     *mapping = _mapping_create_unsafe(block_sz + sizeof(_mapping));
 
-    void* where = (void*)(*mapping + 1);
+    void* where = *mapping + 1;
     _block_create_unsafe(block_sz, where);
 
     (*mapping)->start_block = (_block*)where;
@@ -389,5 +389,4 @@ void*  my_malloc(size_t bytes)
 
 void my_free(void* ptr)
 {
-
 }
