@@ -109,7 +109,7 @@ typedef struct MallocAdjustables _vars;
     *((size_t*)(VOID_PTR)) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + (SIZE)
 
 // meta data per allocation
-#define MY_MALLOC_ALLOC_META (sizeof(size_t))
+#define MY_MALLOC_ALLOC_META (sizeof(size_t) + sizeof(void*))
 
 // how many bytes do i want my block to take
 #define MY_MALLOC_BLOCK_EXPANSION(sz) \
@@ -188,18 +188,23 @@ size_t _mem_more_sz(size_t bytes)
 int    _block_has_room(size_t bytes, _block* block)
 {
     // whether block has enough room for bytes
-    // return 0 is yes, 1 otherwise
+    // return 1 is yes, 0 otherwise
+
+    const size_t free = block->max_free;
+    if (free <= MY_MALLOC_ALLOC_META) {
+        return 0;
+    }
 
     return block->max_free - MY_MALLOC_ALLOC_META >= bytes;
 }
 
-void*  _block_alloc_unsafe(_block* block, size_t bytes)
+void*  _block_alloc_unsafe(size_t bytes, _block* block)
 {
     // allocate bytes from block and update the largest possible
     // allocation in block
     // return the start of allocation
 
-    // Assume: bytes < block.max_free - sizeof(size_t)
+    // Assume: bytes < block.max_free - ALLOC_META
 
     void* to_ret = (char*)block->max_free_ptr + MY_MALLOC_ALLOC_META;
 
@@ -275,7 +280,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     _block* block = (*mapping)->start_block;
     while (block)
     {
-        if (!_block_has_room(bytes, block))
+        if (_block_has_room(bytes, block))
         {
             return block;
         }
@@ -287,7 +292,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
     {
         while (block)
         {
-            if (!_block_has_room(bytes, block))
+            if (_block_has_room(bytes, block))
             {
                 return block;
             }
@@ -336,7 +341,7 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     (*mapping)->start_block = (_block*)where;
     (*mapping)->end_block = (_block*)where;
 
-    return _block_alloc_unsafe((_block*)where, bytes);
+    return _block_alloc_unsafe(bytes, (_block*)where);
 }
 
 void*  _mapping_block_create(size_t bytes, _mapping** mapping)
@@ -359,7 +364,7 @@ void*  _mapping_block_create(size_t bytes, _mapping** mapping)
     (*mapping)->end_block = (_block*)where;
     end_block->next = (_block*)where;
 
-    return _block_alloc_unsafe((_block*)where, bytes);
+    return _block_alloc_unsafe(bytes, (_block*)where);
 }
 
 // currently get working with single threaded
@@ -374,7 +379,7 @@ void*  my_malloc(size_t bytes)
     
     if (block)
     {
-        return _block_alloc_unsafe(block, bytes);
+        return _block_alloc_unsafe(bytes, block);
     }
 
     if (!mapping)
