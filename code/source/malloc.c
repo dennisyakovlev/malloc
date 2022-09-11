@@ -29,10 +29,10 @@ _global;
 typedef struct MallocMapping
 {
     // starting block in this mapping
-    struct MallocBlock* start_block;
+    void* start_block;
 
     // ending block in this mapping
-    struct MallocBlock* end_block;
+    void* end_block;
 
     // next mapping
     struct MallocMapping* next;
@@ -57,12 +57,23 @@ typedef struct MallocBlock
     volatile atomic_char is_free;
 
     // next block
-    struct MallocBlock* next;
+    void* next;
 
-    // pointer to where max free is
+    // pointer to metadata of where max free space is
     void* max_free_ptr;
 }
 _block;
+
+typedef struct MallocAlloc
+{
+    // size of allocated bytes
+    size_t sz;
+
+    // NULL if free, pointer to block this 
+    // allocation is in if in use
+    void* blk;
+}
+_alloc;
 
 typedef struct MallocLock
 {
@@ -128,7 +139,7 @@ static _global G_global =
 static _vars G_vars =
 {
     .more_mem = 1048576,
-    .cache_sz = 1024
+    .cache_sz = 64
 };
 
 static _lock G_lock =
@@ -203,13 +214,14 @@ int    _block_has_room(size_t bytes, _block* block)
     return block->max_free - MY_MALLOC_ALLOC_META >= bytes;
 }
 
-void   _block_update_meta(_block* block)
+void   _block_update_meta(void* block)
 {
     // set new largest allocatable size for block
+    _block* block_ptr = block;
 
-    void* curr = block + 1, *max = curr;
+    void* curr = (char*)block + sizeof(_block), *max = curr;
     size_t i = 0;
-    while (i < block->sz)
+    while (i < block_ptr->sz)
     {
         size_t curr_size = MY_MALLOC_SIZE_GET(curr); 
         if (MY_MALLOC_IS_FREE(curr) && curr_size > MY_MALLOC_SIZE_GET(max))
@@ -220,11 +232,11 @@ void   _block_update_meta(_block* block)
         i += curr_size + sizeof(void*);
         curr = (char*)curr + curr_size + sizeof(void*);
     }
-    block->max_free_ptr = max;
-    block->max_free = MY_MALLOC_SIZE_GET(max);
+    block_ptr->max_free_ptr = max;
+    block_ptr->max_free = MY_MALLOC_SIZE_GET(max);
 }
 
-void*  _block_alloc_unsafe(size_t bytes, _block* block)
+void*  _block_alloc_unsafe(size_t bytes, void* block)
 {
     // allocate bytes from block and update the largest possible
     // allocation in block
@@ -232,24 +244,26 @@ void*  _block_alloc_unsafe(size_t bytes, _block* block)
 
     // Assume: bytes < block.max_free - ALLOC_META
 
-    void* to_ret = (char*)block->max_free_ptr + MY_MALLOC_ALLOC_META;
+    _block* block_ptr = block;
 
-    MY_MALLOC_FREE_INUSE(block->max_free_ptr);
-    size_t remaining = block->max_free - bytes - MY_MALLOC_ALLOC_META;
+    void* to_ret = (char*)block_ptr->max_free_ptr + MY_MALLOC_ALLOC_META;
 
-    MY_MALLOC_SIZE_SET(block->max_free_ptr, bytes);
+    MY_MALLOC_FREE_INUSE(block_ptr->max_free_ptr);
+    size_t remaining = block_ptr->max_free - bytes - MY_MALLOC_ALLOC_META;
 
-    if (remaining <= 64) // should be greater than fast cache
+    MY_MALLOC_SIZE_SET(block_ptr->max_free_ptr, bytes);
+
+    if (remaining <= G_vars.cache_sz) // should be greater than fast cache
     {
         // no more room in block
-        block->max_free = 0;
-        block->max_free_ptr = NULL;
+        block_ptr->max_free = 0;
+        block_ptr->max_free_ptr = NULL;
 
         return to_ret;
     }
 
     // add another space for potential allocation
-    void* after_insert = (char*)block->max_free_ptr + bytes + MY_MALLOC_ALLOC_META;
+    void* after_insert = (char*)block_ptr->max_free_ptr + bytes + MY_MALLOC_ALLOC_META;
     MY_MALLOC_FREE_CLEAR(after_insert);
     MY_MALLOC_SIZE_SET(after_insert, remaining);
 
@@ -274,7 +288,7 @@ void   _block_create_unsafe(size_t sz, void* where)
     *(_block*)where = new_block;
 }
 
-_blk   _block_get(size_t bytes, _mapping** mapping)
+void*  _block_get(size_t bytes, _mapping** mapping)
 {
     // try to get a block with enough bytes
     // return block if found, otherwise null
@@ -287,7 +301,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
         return NULL;
     }
 
-    _block* block = (*mapping)->start_block;
+    void* block = (*mapping)->start_block;
     while (block)
     {
         if (_block_has_room(bytes, block))
@@ -295,7 +309,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
             return block;
         }
 
-        block = block->next;
+        block = ((_block*)block)->next;
     }
 
     while((*mapping)->next)
@@ -307,7 +321,7 @@ _blk   _block_get(size_t bytes, _mapping** mapping)
                 return block;
             }
 
-            block = block->next;
+            block = ((_block*)block)->next;
         }
 
         *mapping = (*mapping)->next;
@@ -332,7 +346,8 @@ _map   _mapping_create_unsafe(size_t sz)
         .end_block   = NULL, 
         .next        = NULL
     };
-    *(_mapping*)start = new_mapping;
+    _mapping* mapping = start;
+    *mapping = new_mapping;
 
     return start;
 }
@@ -343,15 +358,17 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     // return the start of allocation
 
     size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
-    *mapping = _mapping_create_unsafe(block_sz + sizeof(_mapping));
+    void* new_mapping = _mapping_create_unsafe(block_sz + sizeof(_mapping));
+    *mapping = new_mapping;
 
-    void* where = *mapping + 1;
+    void* where = (char*)new_mapping + sizeof(_mapping);
+
     _block_create_unsafe(block_sz, where);
 
-    (*mapping)->start_block = (_block*)where;
-    (*mapping)->end_block = (_block*)where;
+    (*mapping)->start_block = where;
+    (*mapping)->end_block = where;
 
-    return _block_alloc_unsafe(bytes, (_block*)where);
+    return _block_alloc_unsafe(bytes, where);
 }
 
 void*  _mapping_block_create(size_t bytes, _mapping** mapping)
@@ -361,7 +378,7 @@ void*  _mapping_block_create(size_t bytes, _mapping** mapping)
     // return start of allocation
 
     _block* end_block = (*mapping)->end_block;
-    void* where = (char*)end_block + sizeof(_block) + end_block->sz; 
+    void* where = (char*)(*mapping)->end_block + sizeof(_block) + end_block->sz;
     size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
 
     if (block_sz > (char*)(*mapping)->end - (char*)where)
@@ -371,10 +388,10 @@ void*  _mapping_block_create(size_t bytes, _mapping** mapping)
 
     _block_create_unsafe(block_sz, where);
 
-    (*mapping)->end_block = (_block*)where;
-    end_block->next = (_block*)where;
+    (*mapping)->end_block = where;
+    end_block->next = where;
 
-    return _block_alloc_unsafe(bytes, (_block*)where);
+    return _block_alloc_unsafe(bytes, where);
 }
 
 // currently get working with single threaded
@@ -385,7 +402,7 @@ void*  my_malloc(size_t bytes)
     // return pointer to allocated space 
 
     _mapping* mapping = G_global.start_map;
-    _block* block = _block_get(bytes, &mapping);
+    void* block = _block_get(bytes, &mapping);
     
     if (block)
     {
