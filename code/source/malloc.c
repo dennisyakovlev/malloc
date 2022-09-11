@@ -92,21 +92,26 @@ typedef struct MallocAdjustables _vars;
 #endif
 
 // 1 -> free
-// 0 -> in use 
+// 0 -> in use
+// get whether allocation is in use
 #define MY_MALLOC_IS_FREE(VOID_PTR) \
     !(*((size_t*)(VOID_PTR)) & MY_MALLOC_BIT_FREE)
 
+// get size of allocation
 #define MY_MALLOC_SIZE_GET(VOID_PTR) \
     (*((size_t*)(VOID_PTR)) & MY_MALLOC_BIT_SIZE)
 
+// set allocation to in use
 #define MY_MALLOC_FREE_INUSE(VOID_PTR) \
     *((size_t*)(VOID_PTR)) |= MY_MALLOC_BIT_FREE
 
+// set allocation to not in use
 #define MY_MALLOC_FREE_CLEAR(VOID_PTR) \
     *((size_t*)(VOID_PTR)) &= MY_MALLOC_BIT_SIZE
 
+// set size of allocation
 #define MY_MALLOC_SIZE_SET(VOID_PTR, SIZE) \
-    *((size_t*)(VOID_PTR)) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + (SIZE)
+    (*((size_t*)(VOID_PTR)) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + (SIZE))
 
 // meta data per allocation
 #define MY_MALLOC_ALLOC_META (sizeof(size_t) + sizeof(void*))
@@ -198,6 +203,27 @@ int    _block_has_room(size_t bytes, _block* block)
     return block->max_free - MY_MALLOC_ALLOC_META >= bytes;
 }
 
+void   _block_update_meta(_block* block)
+{
+    // set new largest allocatable size for block
+
+    void* curr = block + 1, *max = curr;
+    size_t i = 0;
+    while (i < block->sz)
+    {
+        size_t curr_size = MY_MALLOC_SIZE_GET(curr); 
+        if (MY_MALLOC_IS_FREE(curr) && curr_size > MY_MALLOC_SIZE_GET(max))
+        {
+            max = curr;
+        }
+
+        i += curr_size + sizeof(void*);
+        curr = (char*)curr + curr_size + sizeof(void*);
+    }
+    block->max_free_ptr = max;
+    block->max_free = MY_MALLOC_SIZE_GET(max);
+}
+
 void*  _block_alloc_unsafe(size_t bytes, _block* block)
 {
     // allocate bytes from block and update the largest possible
@@ -227,23 +253,7 @@ void*  _block_alloc_unsafe(size_t bytes, _block* block)
     MY_MALLOC_FREE_CLEAR(after_insert);
     MY_MALLOC_SIZE_SET(after_insert, remaining);
 
-    // get new largest allocatable size for block
-
-    void* curr = block + 1;
-    size_t i = 0;
-    while (i < block->sz)
-    {
-        size_t curr_size = MY_MALLOC_SIZE_GET(curr); 
-        if (MY_MALLOC_IS_FREE(curr) && curr_size > MY_MALLOC_SIZE_GET(after_insert))
-        {
-            after_insert = curr;
-        }
-
-        i += curr_size + sizeof(void*);
-        curr = (char*)curr + curr_size + sizeof(void*);
-    }
-    block->max_free_ptr = after_insert;
-    block->max_free = MY_MALLOC_SIZE_GET(after_insert);
+    _block_update_meta(block);
 
     return to_ret;
 }
@@ -392,4 +402,7 @@ void*  my_malloc(size_t bytes)
 
 void my_free(void* ptr)
 {
+    // free usage in block
+    // get pointer to start of block
+    // call _block_update_meta
 }
