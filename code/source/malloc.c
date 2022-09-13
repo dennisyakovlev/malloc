@@ -64,17 +64,6 @@ typedef struct MallocBlock
 }
 _block;
 
-typedef struct MallocAlloc
-{
-    // size of allocated bytes
-    size_t sz;
-
-    // NULL if free, pointer to block this 
-    // allocation is in if in use
-    void* blk;
-}
-_alloc;
-
 typedef struct MallocLock
 {
     // state of lock
@@ -87,12 +76,8 @@ typedef _mapping* _map;
 typedef struct MallocAdjustables _vars;
 
 #if SIZE_MAX == 0xffffffff
-    #define MY_MALLOC_BIT_SIZE 0xffff
-    #define MY_MALLOC_BIT_FREE 0x10000
     #define MY_MALLOC_SHIFTER 0x80000000
 #elif SIZE_MAX == 0xffffffffffffffff
-    #define MY_MALLOC_BIT_SIZE 0xffffffff
-    #define MY_MALLOC_BIT_FREE 0x100000000
     #define MY_MALLOC_SHIFTER 0x8000000000000000
 #else
     static_assert(0, "not 32 or 64 bit system");
@@ -102,34 +87,62 @@ typedef struct MallocAdjustables _vars;
     static_assert(0, "not gcc or clang")
 #endif
 
-// 1 -> free
-// 0 -> in use
-// get whether allocation is in use
-#define MY_MALLOC_IS_FREE(VOID_PTR) \
-    !(*((size_t*)(VOID_PTR)) & MY_MALLOC_BIT_FREE)
-
-// get size of allocation
-#define MY_MALLOC_SIZE_GET(VOID_PTR) \
-    (*((size_t*)(VOID_PTR)) & MY_MALLOC_BIT_SIZE)
-
-// set allocation to in use
-#define MY_MALLOC_FREE_INUSE(VOID_PTR) \
-    *((size_t*)(VOID_PTR)) |= MY_MALLOC_BIT_FREE
-
-// set allocation to not in use
-#define MY_MALLOC_FREE_CLEAR(VOID_PTR) \
-    *((size_t*)(VOID_PTR)) &= MY_MALLOC_BIT_SIZE
-
-// set size of allocation
-#define MY_MALLOC_SIZE_SET(VOID_PTR, SIZE) \
-    (*((size_t*)(VOID_PTR)) = (*((size_t*)VOID_PTR) & MY_MALLOC_BIT_FREE) + (SIZE))
-
-// meta data per allocation
-#define MY_MALLOC_ALLOC_META (sizeof(size_t) + sizeof(void*))
+// meta data is 
+// size_t - size of this allocation
+// +
+// void* - start of block meta data
 
 // how many bytes do i want my block to take
 #define MY_MALLOC_BLOCK_EXPANSION(sz) \
     (((sz) | 1024) + sizeof(_block) + MY_MALLOC_ALLOC_META)
+
+/* meta data per allocation
+
+   meta data is 
+   size_t - size of this allocation
+   +
+   void* - start of block meta data which
+           allocation is in
+*/
+#define MY_MALLOC_ALLOC_META \
+    (sizeof(size_t) + sizeof(void*))
+
+// get size of allocation
+#define T_MY_MALLOC_GET_SIZE(VP_META) \
+    (*(size_t*)(VP_META))
+
+// get whether allocation is free
+// NULL -> free
+// else -> not free, start of block
+#define T_MY_MALLOC_GET_AVAILABILITY(VP_META) \
+    ((char*)(VP_META) + sizeof(size_t))
+
+// set size of allocation
+#define T_MY_MALLOC_SET_SIZE(VP_META, SZ) \
+    *(size_t*)(VP_META) = SZ
+
+// set allocation to free
+#define T_MY_MALLOC_SET_FREE(VP_META) \
+    do \
+    { \
+        void* temp = T_MY_MALLOC_GET_AVAILABILITY(VP_META); \
+        temp = NULL; \
+        if (temp); \
+    } while (0)
+    
+
+// set allocation to inuse
+#define T_MY_MALLOC_SET_INUSE(VP_META, VP_BLOCK) \
+    do \
+    { \
+        void* temp = T_MY_MALLOC_GET_AVAILABILITY(VP_META); \
+        temp = VP_BLOCK; \
+        if (temp); \
+    } while (0)
+
+// move to start of meta data for next allocation
+#define T_MY_MALLOC_NEXT(VP_META) \
+    ((char*)(VP_META) + MY_MALLOC_ALLOC_META + T_MY_MALLOC_GET_SIZE(VP_META))
 
 static _global G_global =
 {
@@ -223,17 +236,17 @@ void   _block_update_meta(void* block)
     size_t i = 0;
     while (i < block_ptr->sz)
     {
-        size_t curr_size = MY_MALLOC_SIZE_GET(curr); 
-        if (MY_MALLOC_IS_FREE(curr) && curr_size > MY_MALLOC_SIZE_GET(max))
+        size_t curr_size = T_MY_MALLOC_GET_SIZE(curr);
+        if (T_MY_MALLOC_GET_AVAILABILITY(curr) && curr_size > T_MY_MALLOC_GET_SIZE(max))
         {
             max = curr;
         }
 
-        i += curr_size + sizeof(void*);
-        curr = (char*)curr + curr_size + sizeof(void*);
+        i += curr_size + MY_MALLOC_ALLOC_META;
+        curr = T_MY_MALLOC_NEXT(curr);
     }
     block_ptr->max_free_ptr = max;
-    block_ptr->max_free = MY_MALLOC_SIZE_GET(max);
+    block_ptr->max_free = T_MY_MALLOC_GET_SIZE(max);
 }
 
 void*  _block_alloc_unsafe(size_t bytes, void* block)
@@ -248,10 +261,10 @@ void*  _block_alloc_unsafe(size_t bytes, void* block)
 
     void* to_ret = (char*)block_ptr->max_free_ptr + MY_MALLOC_ALLOC_META;
 
-    MY_MALLOC_FREE_INUSE(block_ptr->max_free_ptr);
+    T_MY_MALLOC_SET_INUSE(block_ptr->max_free_ptr, block);
     size_t remaining = block_ptr->max_free - bytes - MY_MALLOC_ALLOC_META;
 
-    MY_MALLOC_SIZE_SET(block_ptr->max_free_ptr, bytes);
+    T_MY_MALLOC_SET_SIZE(block_ptr->max_free_ptr, bytes);
 
     if (remaining <= G_vars.cache_sz) // should be greater than fast cache
     {
@@ -264,8 +277,8 @@ void*  _block_alloc_unsafe(size_t bytes, void* block)
 
     // add another space for potential allocation
     void* after_insert = (char*)block_ptr->max_free_ptr + bytes + MY_MALLOC_ALLOC_META;
-    MY_MALLOC_FREE_CLEAR(after_insert);
-    MY_MALLOC_SIZE_SET(after_insert, remaining);
+    T_MY_MALLOC_SET_FREE(after_insert);
+    T_MY_MALLOC_SET_SIZE(after_insert, remaining);
 
     _block_update_meta(block);
 
