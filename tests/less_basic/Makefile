@@ -1,5 +1,4 @@
-# OBJECTS=loop large mix
-OBJECTS=mix
+OBJECTS=loop large mix thourough
 CURRDIR=$(BUILDIR)/tests/less_basic
 
 all: directory tests
