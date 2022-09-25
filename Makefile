@@ -1,6 +1,6 @@
 export PROJECTDIR=$(realpath $(CURDIR))
 export BUILDIR=$(PROJECTDIR)/build
-export FLAGS=-Wall -Wpedantic -Wshadow
+export FLAGS=-Wall -Wpedantic -Wshadow -fstrict-aliasing -Wstrict-aliasing
 
 export CC=gcc
 
