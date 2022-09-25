@@ -6,7 +6,7 @@
         - Mapping
         - Block
         - Allocations
-    
+
     Overhead:
 
         There is overhead at every level of linked list.
@@ -14,18 +14,18 @@
         is neglegable compared to the number of
         allocated bytes.
         Every allocation has MY_MALLOC_ALLOC_META bytes
-        of overhead. Usually 8 amd 16 bytes for 32 and
+        of overhead. Usually 8 and 16 bytes for 32 and
         64 bit systems respectively.
 
     Allocation:
 
         An allocation causes a searching all three levels
-        of linked lists. 
+        of linked lists.
         A first fit strategy is used for allocations.
         Once a space is found in a block, the space
         gets set to taken and the entire block is iterated
         over to update meta data.
-    
+
     Free:
 
         A free causes a looping over of the block the
@@ -40,7 +40,7 @@
 
         - Returning a void pointer from "my_malloc" then
           having a void pointer as the param to "my_free"
-          is undefined behaviour. Since 
+          is undefined behaviour. Since
             some_ptr -> void* -> some_ptr
           is defined. But
             void* -> some_ptr -> void*
@@ -93,7 +93,7 @@ typedef struct MallocMapping
 _mapping;
 
 /*  Is the second level in linked list chain.
-    Blocks can be locked. They consist of 
+    Blocks can be locked. They consist of
     allocations.
 
     At any time in the block there is always
@@ -105,7 +105,7 @@ _mapping;
         ie
         BLOCK_META_DATA         |
         META_DATA (sz_1,used)   |
-        ...                     | 
+        ...                     |
             in use memory       |
         ...                     |
         META_DATA (sz_2,free) <- max_free_ptr
@@ -128,11 +128,11 @@ _mapping;
 
     Note: For simplicity, the above block is
           respresented as
-        
-        (sz_1,used) -> (sz_2,free) -> (sz_3,used) -> (sz_4,free) -> 
-        
+
+        (sz_1,used) -> (sz_2,free) -> (sz_3,used) -> (sz_4,free) ->
+
         Where sz_N represents the amount of bytes that can be
-        allocated in a particular node. 
+        allocated in a particular node.
 */
 typedef struct MallocBlock
 {
@@ -193,7 +193,7 @@ typedef struct MallocAdjustables _vars;
     This is needed because for a requested number of
     bytes, there is some extra number of bytes needed
     for meta data.
-    
+
     {    1    }   {     2      }   {        3         }
     (sz | 1024) + sizeof(_block) + MY_MALLOC_ALLOC_META
 
@@ -208,7 +208,7 @@ typedef struct MallocAdjustables _vars;
 
 /*  Meta data per allocation.
 
-    meta data is 
+    meta data is
     size_t - size of this allocation
     +
     void* - start of block meta data which
@@ -228,7 +228,7 @@ typedef struct MallocAdjustables _vars;
     (*(size_t*)(VP_META))
 
 /*  Get whether allocation is free.
-    
+
     NULL -> free
     else -> not free, start of block
 */
@@ -249,7 +249,7 @@ typedef struct MallocAdjustables _vars;
         *(void**)temp = NULL; \
         if (temp); \
     } while (0)
-    
+
 /* Set allocation to inuse.
 */
 #define MY_MALLOC_SET_INUSE(VP_META, VP_BLOCK) \
@@ -293,11 +293,11 @@ void*  _mem_get(size_t bytes)
 size_t _mem_more_sz(size_t bytes)
 {
     // determine number of new bytes which will be allocated
-    
+
     // Note: function will return 1 if bytes has the highest
     //       bit set on the platform
     //       ie: on 32 bit if bytes >= 2^31
-    //           on 64 but if bytes >= 2^63  
+    //           on 64 but if bytes >= 2^63
 
     if (bytes < G_vars.more_mem)
     {
@@ -357,7 +357,7 @@ void   _block_update_meta(void* block)
                 U -> F -> U -> U ->
             which, with a free, can be turned into
                 U -> F -> F -> U ->
-            
+
             Consider as well
                 U -> F -> U -> F ->
             which, with a free, can be turned into
@@ -405,7 +405,7 @@ void   _block_update_meta(void* block)
 
         (taken,sz_1) -> (taken,sz_2) -> (free,sz_3) -> (taken/free,sz_4) -> ...
                                         prev           curr (i)
-        
+
         i = sz_1 + sz_2 + sz_3 + (META * 3) + BLOCK_META
     */
 
@@ -430,7 +430,7 @@ void   _block_update_meta(void* block)
             curr_sz += MY_MALLOC_GET_SIZE(prev) + MY_MALLOC_ALLOC_META;
 
             void* next = MY_MALLOC_NEXT(curr);
-            if 
+            if
             (
                 i + MY_MALLOC_GET_SIZE(curr) + MY_MALLOC_ALLOC_META < block_ptr->sz
                 &&
@@ -439,7 +439,7 @@ void   _block_update_meta(void* block)
             {
                 // next is also free, merge all three
 
-                curr_sz += MY_MALLOC_GET_SIZE(next) + MY_MALLOC_ALLOC_META; 
+                curr_sz += MY_MALLOC_GET_SIZE(next) + MY_MALLOC_ALLOC_META;
             }
 
             MY_MALLOC_SET_SIZE(prev, curr_sz);
@@ -524,10 +524,10 @@ void   _block_create_unsafe(size_t sz, void* where)
         .max_free_ptr = (char*)where + sizeof(_block),
         .max_free     = sz - sizeof(_block) - MY_MALLOC_ALLOC_META
     };
-    
+
     *block_ptr = new_block;
 
-    void* initial_alloc = (char*)where + sizeof(_block); 
+    void* initial_alloc = (char*)where + sizeof(_block);
     MY_MALLOC_SET_FREE(initial_alloc);
     MY_MALLOC_SET_SIZE(initial_alloc, block_ptr->max_free);
     // MY_MALLOC_SET_SIZE(initial_alloc, block_ptr->sz);
@@ -571,7 +571,7 @@ void*  _block_get(size_t bytes, _mapping** mapping)
         }
 
         *mapping = (*mapping)->next;
-    }        
+    }
 
     return NULL;
 }
@@ -589,7 +589,7 @@ _map   _mapping_create_unsafe(size_t sz)
         .start       = start,
         .end         = (char*)start + more_mem,
         .start_block = NULL,
-        .end_block   = NULL, 
+        .end_block   = NULL,
         .next        = NULL
     };
     _mapping* mapping = start;
@@ -645,11 +645,11 @@ void*  _mapping_block_create(size_t bytes, _mapping** mapping)
 void*  my_malloc(size_t bytes)
 {
     // allocate bytes somewhere on the heap
-    // return pointer to allocated space 
+    // return pointer to allocated space
 
     _mapping* mapping = G_global.start_map;
     void* block = _block_get(bytes, &mapping);
-    
+
     if (block)
     {
         return _block_alloc_unsafe(bytes, block);
