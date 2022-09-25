@@ -530,8 +530,6 @@ void   _block_create_unsafe(size_t sz, void* where)
     void* initial_alloc = (char*)where + sizeof(_block);
     MY_MALLOC_SET_FREE(initial_alloc);
     MY_MALLOC_SET_SIZE(initial_alloc, block_ptr->max_free);
-    // MY_MALLOC_SET_SIZE(initial_alloc, block_ptr->sz);
-    // used to be this... ???
 }
 
 void*  _block_get(size_t bytes, _mapping** mapping)
