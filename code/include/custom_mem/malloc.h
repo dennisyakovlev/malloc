@@ -6,10 +6,6 @@ struct MallocAdjustables
     /* Minimum amount of more memory to request at a time.
     */
     size_t more_mem;
-
-    /* Fast cache size.
-    */
-    size_t cache_sz;
 };
 
 // request n bytes of contiguous memory

@@ -273,8 +273,7 @@ static _global G_global =
 
 static _vars G_vars =
 {
-    .more_mem = 1048576,
-    .cache_sz = 64
+    .more_mem = 1048576
 };
 
 void*  _mem_get(size_t bytes)
@@ -637,8 +636,6 @@ void*  _mapping_block_create(size_t bytes, _mapping** mapping)
 
     return _block_alloc_unsafe(bytes, where);
 }
-
-// currently get working with single threaded
 
 void*  my_malloc(size_t bytes)
 {
