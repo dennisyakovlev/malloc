@@ -17,6 +17,32 @@
         of overhead. Usually 8 and 16 bytes for 32 and
         64 bit systems respectively.
 
+    Locking:
+
+        Mutal exclusion is needed at two levels.
+            1) Mapping
+            2) Block
+        
+        (1)
+        A lock on (1) gives a thread exclusive access
+        to that entire linked list level.
+            ie no other mapping can be modified
+        Locking this level is used for when the linked
+        list of mappings needs to be modified. This only
+        happens when more memory is needed / removed. An
+        expensive operation. Can switch out the thread
+        while waiting for this lock.
+
+        (2)
+        Locking (2) gives a thread exclusive access
+        to only the requested node.
+            ie other threads can modify other blocks,
+               but not the locked one  
+        Locking this level is used for when the linked
+        list of blocks in a mapping needs to be
+        modified. This can be for a variety of reasons,
+        but is a very cheap operation. 
+
     Allocation:
 
         An allocation causes a searching all three levels
@@ -58,6 +84,11 @@
 typedef struct MallocGlobal
 {
     struct MallocMapping* start_map;
+
+    /*  Whether any mapping is currently
+        being modified.
+    */
+    atomic_char is_free;
 }
 _global;
 
@@ -146,7 +177,7 @@ typedef struct MallocBlock
 
     /*  Whether being modified currently.
     */
-    volatile atomic_char is_free;
+    atomic_char is_free;
 
     /*  Next block.
 
@@ -165,13 +196,6 @@ typedef struct MallocBlock
 }
 _block;
 
-typedef struct MallocLock
-{
-    // state of lock
-    volatile atomic_char state; // 1 free, 0 in use, 2 error
-}
-_lock;
-
 typedef _block* _blk;
 typedef _mapping* _map;
 typedef struct MallocAdjustables _vars;
@@ -184,8 +208,60 @@ typedef struct MallocAdjustables _vars;
     static_assert(0, "not 32 or 64 bit system");
 #endif
 
-#if !(defined(__clang__) || defined(__GNUC__) || defined(__GNUG__))
-    static_assert(0, "not gcc or clang")
+/*  Need "pause" or close to equivalent.
+
+    Ripped from https://github.com/gstrauss/plasma
+*/
+#if defined(__x86_64__) || defined(__i386__)
+
+  #define MY_MALLOC_PAUSE() \
+    __asm__ __volatile__ ("pause")
+
+#elif defined(__ia64__)
+
+  #if (defined(__HP_cc__) || defined(__HP_aCC__))
+
+    #define MY_MALLOC_PAUSE() \
+        _Asm_hint(_HINT_PAUSE)
+
+  #else
+
+    #define MY_MALLOC_PAUSE() \
+        __asm__ __volatile__ ("hint @pause")
+
+  #endif
+
+#elif defined(__arm__)
+
+  #ifdef __CC_ARM
+
+    #define MY_MALLOC_PAUSE() \
+        __yield()
+
+  #else
+
+    #define MY_MALLOC_PAUSE() \
+        __asm__ __volatile__ ("yield")
+
+  #endif
+
+#else
+
+    static_assert(0, "Need \"pause\" instruction or similar defined.");
+
+#endif
+
+/*  Need count leading zero's or equivalent.
+*/
+#if defined(__clang__) || defined(__GNUC__) || defined(__GNUG__)
+
+    #define MY_MALLOC_CLZ(NUM) \
+        __builtin_clzl(NUM)
+
+#else
+
+    static_assert(0, "Need clz or equivalent defined.")
+
 #endif
 
 /*  How many bytes should the block take.
@@ -266,14 +342,24 @@ typedef struct MallocAdjustables _vars;
 #define MY_MALLOC_NEXT(VP_META) \
     ((char*)(VP_META) + MY_MALLOC_ALLOC_META + MY_MALLOC_GET_SIZE(VP_META))
 
+#define MY_MALLOC_LOCK_FREE 1
+
+#define MY_MALLOC_LOCK_INSUSE 0
+
 static _global G_global =
 {
-    .start_map = NULL
+    .start_map = NULL,
+    .is_free   = MY_MALLOC_LOCK_FREE
 };
 
 static _vars G_vars =
 {
-    .more_mem = 1048576
+    .more_mem  = 1048576,
+    .long_wait =
+    {
+        0,
+        2000
+    }
 };
 
 void*  _mem_get(size_t bytes)
@@ -281,7 +367,7 @@ void*  _mem_get(size_t bytes)
     // get bytes more memory
 
     void* res = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (res == (void*)-1) // set errno
+    if (res == (void*)-1)
     {
         return NULL;
     }
@@ -304,14 +390,58 @@ size_t _mem_more_sz(size_t bytes)
     }
 
     // lowest power of 2 greater than bytes
-    return MY_MALLOC_SHIFTER >> (__builtin_clzl(bytes) - 1);
+    return MY_MALLOC_SHIFTER >> (MY_MALLOC_CLZ(bytes) - 1);
+}
+
+inline void   _wait_short()
+{
+    // wait for a relatively shorter period of time
+
+    for (int i = 0; i != 32; ++i)
+    {
+        MY_MALLOC_PAUSE();
+    }
+}
+
+static inline void   _wait_long()
+{
+    // wait for a relatively longer period of time
+
+    /*  technically speaking, okay if nanosleep fails
+        will just be caught later on when depth limit is exceeded
+    */
+
+    nanosleep(&G_vars.long_wait, NULL);
+}
+
+int    _block_lock_try_acquire(void* block)
+{
+    // obtain sole access to modification of
+    // the block
+    // return 1 for success
+    // failure can only occur if block is already
+    // acquired
+
+    _block* block_ptr = block;
+    char expected = MY_MALLOC_LOCK_FREE;
+
+    return atomic_compare_exchange_strong(&block_ptr->is_free, &expected, MY_MALLOC_LOCK_INSUSE);
+}
+
+void   _block_lock_free(void* block)
+{
+    // make the block available for modification
+
+    _block* block_ptr = block;
+
+    atomic_store(&block_ptr->is_free, MY_MALLOC_LOCK_FREE);
 }
 
 int    _block_has_room(size_t bytes, _block* block)
 {
     // whether block has enough room for bytes
     // plus an allocation meta data
-    // return 1 is yes, 0 otherwise
+    // return 1 if yes, 0 otherwise
 
     const size_t free = block->max_free;
     if (free <= MY_MALLOC_ALLOC_META)
@@ -464,6 +594,10 @@ void   _block_update_meta(void* block)
 
     block_ptr->max_free = MY_MALLOC_GET_SIZE(max);
     block_ptr->max_free_ptr = max;
+
+    // ALWAYS free the lock in the block here
+    // tihs means this function M U S T be called last,
+    // or alteast in a way that accounts for this
 }
 
 void*  _block_alloc_unsafe(size_t bytes, void* block)
@@ -531,6 +665,9 @@ void   _block_create_unsafe(size_t sz, void* where)
     MY_MALLOC_SET_SIZE(initial_alloc, block_ptr->max_free);
 }
 
+/*  need to have hint in _block_get
+*/
+
 void*  _block_get(size_t bytes, _mapping** mapping)
 {
     // try to get a block with enough bytes
@@ -547,7 +684,7 @@ void*  _block_get(size_t bytes, _mapping** mapping)
     void* block = (*mapping)->start_block;
     while (block)
     {
-        if (_block_has_room(bytes, block))
+        if (_block_has_room(bytes, block)) // && _block_lock_acquire
         {
             return block;
         }
@@ -559,7 +696,7 @@ void*  _block_get(size_t bytes, _mapping** mapping)
     {
         while (block)
         {
-            if (_block_has_room(bytes, block))
+            if (_block_has_room(bytes, block)) // && _block_lock_acquire
             {
                 return block;
             }
@@ -573,6 +710,17 @@ void*  _block_get(size_t bytes, _mapping** mapping)
     return NULL;
 }
 
+int    _mapping_has_room(size_t block_sz, _mapping* mapping)
+{
+    // whether mapping has enough room for bytes
+    // return 1 if yes, 0 otherwise
+
+    _block* end_block = mapping->end_block;
+    char* inuse_end = (char*)mapping->end_block + end_block->sz;
+
+    return block_sz > (char*)mapping->end - inuse_end;
+}
+
 _map   _mapping_create_unsafe(size_t sz)
 {
     // create mapping capable of holding sz
@@ -580,6 +728,10 @@ _map   _mapping_create_unsafe(size_t sz)
 
     size_t more_mem = _mem_more_sz(sz + sizeof(_mapping));
     void* start = _mem_get(more_mem);
+    if (!start)
+    {
+        return NULL;
+    }
 
     _mapping new_mapping =
     {
@@ -602,6 +754,10 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
 
     size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
     void* new_mapping = _mapping_create_unsafe(block_sz + sizeof(_mapping));
+    if (!new_mapping)
+    {
+        return NULL;
+    }
     *mapping = new_mapping;
 
     void* where = (char*)new_mapping + sizeof(_mapping);
@@ -614,27 +770,71 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     return _block_alloc_unsafe(bytes, where);
 }
 
-void*  _mapping_block_create(size_t bytes, _mapping** mapping)
+void*  _mapping_append_block(size_t block_sz, _mapping* mapping)
 {
-    // add block onto existing mapping if can, otherwise create
-    // new mapping
-    // return start of allocation
+    // add block to the end of mapping
+    // return start of new block
 
-    _block* end_block = (*mapping)->end_block;
-    void* where = (char*)(*mapping)->end_block + end_block->sz;
-    size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
+    // Assume: mapping has enough room for block_sz
 
-    if (block_sz > (char*)(*mapping)->end - (char*)where)
+    _block* end_block = mapping->end_block;
+    void* new_block = (char*)mapping->end_block + end_block->sz;
+    
+    _block_create_unsafe(block_sz, new_block);
+    
+    mapping->end_block = new_block;
+    end_block->next = new_block;
+
+    return new_block;
+}
+
+void*  _advanced_malloc(size_t bytes, char search, void* block, _mapping* mapping)
+{
+    // get an allocation of bytes beginning by looking
+    // from block and mapping
+    // only search for block if indicated
+
+    if (search)
     {
-        return _mapping_create(bytes, &(*mapping)->next);
+        void* block_res = _block_get(bytes, &mapping);
+
+        if (block_res)
+        {
+            return _block_alloc_unsafe(bytes, block_res);
+        }
     }
 
-    _block_create_unsafe(block_sz, where);
+    ++search;
 
-    (*mapping)->end_block = where;
-    end_block->next = where;
+    /*  Failed to find a block. No matter what will have
+        to modify atleast one mapping.
+    */
 
-    return _block_alloc_unsafe(bytes, where);
+    char expected = MY_MALLOC_LOCK_FREE;
+    if (atomic_compare_exchange_strong(&G_global.is_free, &expected, MY_MALLOC_LOCK_INSUSE))
+    {
+        size_t block_sz = MY_MALLOC_BLOCK_EXPANSION(bytes);
+
+        if (!mapping || !_mapping_has_room(block_sz, mapping))
+        {
+            // mapping is null or does not have enough room
+            // for a new block of necessary size
+
+            void* res = _mapping_create(bytes, &mapping);
+            atomic_store(&G_global.is_free, MY_MALLOC_LOCK_FREE);
+
+            return res;
+        }
+
+        void* new_block = _mapping_append_block(block_sz, mapping);
+        atomic_store(&G_global.is_free, MY_MALLOC_LOCK_FREE);
+
+        return _block_alloc_unsafe(bytes, new_block);
+    }
+
+    _wait_long();
+
+    return _advanced_malloc(bytes, search, block, mapping);
 }
 
 void*  my_malloc(size_t bytes)
@@ -650,12 +850,7 @@ void*  my_malloc(size_t bytes)
         return _block_alloc_unsafe(bytes, block);
     }
 
-    if (!mapping)
-    {
-        return _mapping_create(bytes, &G_global.start_map);
-    }
-
-    return _mapping_block_create(bytes, &mapping);
+    return _advanced_malloc(bytes, 0, block, mapping);
 }
 
 void   my_free(void* ptr)
@@ -663,6 +858,9 @@ void   my_free(void* ptr)
     // set an allocation to be freed
 
     void* block = MY_MALLOC_GET_AVAILABILITY((char*)ptr - MY_MALLOC_ALLOC_META);
+
+    // MUST obtain the lock on the block NO matter what
+
     MY_MALLOC_SET_FREE((char*)ptr - MY_MALLOC_ALLOC_META);
     _block_update_meta(block);
 }
