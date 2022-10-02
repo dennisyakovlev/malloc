@@ -393,7 +393,7 @@ size_t _mem_more_sz(size_t bytes)
     return MY_MALLOC_SHIFTER >> (MY_MALLOC_CLZ(bytes) - 1);
 }
 
-inline void   _wait_short()
+static inline void   _wait_short()
 {
     // wait for a relatively shorter period of time
 
@@ -414,42 +414,43 @@ static inline void   _wait_long()
     nanosleep(&G_vars.long_wait, NULL);
 }
 
-int    _block_lock_try_acquire(void* block)
-{
-    // obtain sole access to modification of
-    // the block
-    // return 1 for success
-    // failure can only occur if block is already
-    // acquired
-
-    _block* block_ptr = block;
-    char expected = MY_MALLOC_LOCK_FREE;
-
-    return atomic_compare_exchange_strong(&block_ptr->is_free, &expected, MY_MALLOC_LOCK_INSUSE);
-}
-
-void   _block_lock_free(void* block)
+static inline void   _block_lock_free(void* block)
 {
     // make the block available for modification
 
-    _block* block_ptr = block;
-
-    atomic_store(&block_ptr->is_free, MY_MALLOC_LOCK_FREE);
+    ((_block*)block)->is_free = MY_MALLOC_LOCK_FREE;
+    // atomic_store(&((_block*)block)->is_free, MY_MALLOC_LOCK_FREE);
 }
 
-int    _block_has_room(size_t bytes, _block* block)
+static inline int    _block_has_room(size_t bytes, _block* block)
 {
     // whether block has enough room for bytes
     // plus an allocation meta data
     // return 1 if yes, 0 otherwise
 
-    const size_t free = block->max_free;
-    if (free <= MY_MALLOC_ALLOC_META)
+    return block->max_free >= bytes;
+}
+
+int    _block_acquire(size_t bytes, void* block)
+{
+    // acquire sole access to a block
+    // return 1 if successful
+
+    _block* block_ptr = block;
+    char expected = MY_MALLOC_LOCK_FREE;
+
+    if (atomic_compare_exchange_strong(&block_ptr->is_free, &expected, MY_MALLOC_LOCK_INSUSE))
     {
-        return bytes == 0;
+        // verify available space after obtained lock
+        if (_block_has_room(bytes, block))
+        {
+            return 1;
+        }
+
+        _block_lock_free(block);
     }
 
-    return block->max_free - MY_MALLOC_ALLOC_META >= bytes;
+    return 0;
 }
 
 void   _block_update_meta(void* block)
@@ -497,7 +498,7 @@ void   _block_update_meta(void* block)
             which, with an allocation could be
                 U -> U -> U ->
 
-            With any single free, atmost three
+            With any single manipulation, atmost three
             consecutive frees will occur. Need to
             merge [0,3] consecutive frees.
     */
@@ -794,13 +795,22 @@ void*  _advanced_malloc(size_t bytes, char search, void* block, _mapping* mappin
     // from block and mapping
     // only search for block if indicated
 
+    /*  NEED depth limiter on search
+    */
+
     if (search)
     {
         void* block_res = _block_get(bytes, &mapping);
 
         if (block_res)
         {
-            return _block_alloc_unsafe(bytes, block_res);
+            if (_block_acquire(bytes, block_res))
+            {
+                void* res = _block_alloc_unsafe(bytes, block_res);
+                _block_lock_free(block_res);
+
+                return res;
+            }
         }
     }
 
@@ -847,7 +857,13 @@ void*  my_malloc(size_t bytes)
 
     if (block)
     {
-        return _block_alloc_unsafe(bytes, block);
+        if (_block_acquire(bytes, block))
+        {
+            void* res = _block_alloc_unsafe(bytes, block);
+            _block_lock_free(block);
+
+            return res;
+        }
     }
 
     return _advanced_malloc(bytes, 0, block, mapping);
@@ -859,8 +875,13 @@ void   my_free(void* ptr)
 
     void* block = MY_MALLOC_GET_AVAILABILITY((char*)ptr - MY_MALLOC_ALLOC_META);
 
-    // MUST obtain the lock on the block NO matter what
+    while (!_block_acquire(0, block))
+    {
+        _wait_short();
+    }
 
     MY_MALLOC_SET_FREE((char*)ptr - MY_MALLOC_ALLOC_META);
     _block_update_meta(block);
+    
+    _block_lock_free(block);
 }
