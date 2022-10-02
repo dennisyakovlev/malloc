@@ -446,7 +446,7 @@ int    _block_has_room(size_t bytes, _block* block)
     const size_t free = block->max_free;
     if (free <= MY_MALLOC_ALLOC_META)
     {
-        return 0;
+        return bytes == 0;
     }
 
     return block->max_free - MY_MALLOC_ALLOC_META >= bytes;
