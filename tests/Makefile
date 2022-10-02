@@ -1,6 +1,6 @@
 # statically link into every test, allowing for easy debugging
 
-DIRS=basic less_basic
+DIRS=basic less_basic multi_thread
 
 all: directory tests 
 

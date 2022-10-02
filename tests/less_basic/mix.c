@@ -8,7 +8,7 @@ static int indicies[NUM_CALLS] = {36, 23, 58, 3, 62, 8, 27, 33, 54, 47, 17, 63, 
 
 int main(int argc, char const *argv[])
 {
-    int* arr[65] = { 0 }; // should be 65
+    int* arr[65] = { 0 };
 
     for (int i = 0; i != NUM_CALLS; ++i)
     {
