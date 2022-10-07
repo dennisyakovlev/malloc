@@ -362,7 +362,7 @@ static _vars G_vars =
     }
 };
 
-void*  _mem_get(size_t bytes)
+static void*  _mem_get(size_t bytes)
 {
     // get bytes more memory
 
@@ -375,7 +375,7 @@ void*  _mem_get(size_t bytes)
     return res;
 }
 
-size_t _mem_more_sz(size_t bytes)
+static size_t _mem_more_sz(size_t bytes)
 {
     // determine number of new bytes which will be allocated
 
@@ -393,7 +393,7 @@ size_t _mem_more_sz(size_t bytes)
     return MY_MALLOC_SHIFTER >> (MY_MALLOC_CLZ(bytes) - 1);
 }
 
-static inline void   _wait_short()
+static void   _wait_short()
 {
     // wait for a relatively shorter period of time
 
@@ -403,7 +403,7 @@ static inline void   _wait_short()
     }
 }
 
-static inline void   _wait_long()
+static void   _wait_long()
 {
     // wait for a relatively longer period of time
 
@@ -414,7 +414,7 @@ static inline void   _wait_long()
     nanosleep(&G_vars.long_wait, NULL);
 }
 
-static inline void   _block_lock_free(void* block)
+static void   _block_lock_free(void* block)
 {
     // make the block available for modification
 
@@ -422,7 +422,7 @@ static inline void   _block_lock_free(void* block)
     // atomic_store(&((_block*)block)->is_free, MY_MALLOC_LOCK_FREE);
 }
 
-static inline int    _block_has_room(size_t bytes, _block* block)
+static int    _block_has_room(size_t bytes, _block* block)
 {
     // whether block has enough room for bytes
     // plus an allocation meta data
@@ -431,7 +431,7 @@ static inline int    _block_has_room(size_t bytes, _block* block)
     return block->max_free >= bytes;
 }
 
-int    _block_acquire(size_t bytes, void* block)
+static int    _block_acquire(size_t bytes, void* block)
 {
     // acquire sole access to a block
     // return 1 if successful
@@ -453,7 +453,7 @@ int    _block_acquire(size_t bytes, void* block)
     return 0;
 }
 
-void   _block_update_meta(void* block)
+static void   _block_update_meta(void* block)
 {
     // update the block meta data to reflect
     // information in the allocation meta data's
@@ -601,7 +601,7 @@ void   _block_update_meta(void* block)
     // or alteast in a way that accounts for this
 }
 
-void*  _block_alloc_unsafe(size_t bytes, void* block)
+static void*  _block_alloc_unsafe(size_t bytes, void* block)
 {
     // allocate bytes from block and update the largest possible
     // allocation in block
@@ -639,7 +639,7 @@ void*  _block_alloc_unsafe(size_t bytes, void* block)
     return alloc_start;
 }
 
-void   _block_create_unsafe(size_t sz, void* where)
+static void   _block_create_unsafe(size_t sz, void* where)
 {
     // create a block of sz starting the block on where
     // return the total number of bytes taken
@@ -666,10 +666,7 @@ void   _block_create_unsafe(size_t sz, void* where)
     MY_MALLOC_SET_SIZE(initial_alloc, block_ptr->max_free);
 }
 
-/*  need to have hint in _block_get
-*/
-
-void*  _block_get(size_t bytes, _mapping** mapping)
+static void*  _block_get(size_t bytes, _mapping** mapping)
 {
     // try to get a block with enough bytes
     // return block if found, otherwise null
@@ -711,7 +708,7 @@ void*  _block_get(size_t bytes, _mapping** mapping)
     return NULL;
 }
 
-int    _mapping_has_room(size_t block_sz, _mapping* mapping)
+static int    _mapping_has_room(size_t block_sz, _mapping* mapping)
 {
     // whether mapping has enough room for bytes
     // return 1 if yes, 0 otherwise
@@ -722,7 +719,7 @@ int    _mapping_has_room(size_t block_sz, _mapping* mapping)
     return block_sz > (char*)mapping->end - inuse_end;
 }
 
-_map   _mapping_create_unsafe(size_t sz)
+static _map   _mapping_create_unsafe(size_t sz)
 {
     // create mapping capable of holding sz
     // return where the mapping is created
@@ -748,7 +745,7 @@ _map   _mapping_create_unsafe(size_t sz)
     return start;
 }
 
-void*  _mapping_create(size_t bytes, _mapping** mapping)
+static void*  _mapping_create(size_t bytes, _mapping** mapping)
 {
     // request a mapping with bytes allocated onto it
     // return the start of allocation
@@ -771,7 +768,7 @@ void*  _mapping_create(size_t bytes, _mapping** mapping)
     return _block_alloc_unsafe(bytes, where);
 }
 
-void*  _mapping_append_block(size_t block_sz, _mapping* mapping)
+static void*  _mapping_append_block(size_t block_sz, _mapping* mapping)
 {
     // add block to the end of mapping
     // return start of new block
@@ -789,7 +786,7 @@ void*  _mapping_append_block(size_t block_sz, _mapping* mapping)
     return new_block;
 }
 
-void*  _advanced_malloc(size_t bytes, char search, void* block, _mapping* mapping)
+static void*  _advanced_malloc(size_t bytes, char search, void* block, _mapping* mapping)
 {
     // get an allocation of bytes beginning by looking
     // from block and mapping
