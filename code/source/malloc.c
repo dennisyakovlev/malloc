@@ -73,6 +73,9 @@
           is not defined.
 
           The second set of conversions is avoided elsewhere.
+
+        - Assume mmap is zero backed. This is very likely to
+          be true, but not gaurenteed.
 */
 
 #include <custom_mem/malloc.h>
@@ -80,6 +83,7 @@
 #include <assert.h>
 #include <sys/mman.h> // mmap
 #include <stdint.h>   // SIZE_MAX
+#include <string.h>   // memset, memcpy
 
 typedef struct MallocGlobal
 {
@@ -130,9 +134,10 @@ _mapping;
     At any time in the block there is always
     atleast one allocation meta data which
     can be used for an allocation.
-    The gaurenteed meta data will be at the
-    end of the block. However, there may
-    be other free spaces within the block.
+    The gaurenteed meta data will be after
+    the last used byte in the block. However,
+    there may be other free spaces within
+    the block.
         ie
         BLOCK_META_DATA         |
         META_DATA (sz_1,used)   |
@@ -435,7 +440,8 @@ static int    _block_has_room(size_t bytes, _block* block)
 
 static int    _block_acquire(size_t bytes, void* block)
 {
-    // acquire sole access to a block
+    // acquire sole access to a block so that the
+    // block has bytes space available
     // return 1 if successful
 
     _block* block_ptr = block;
@@ -597,10 +603,6 @@ static void   _block_update_meta(void* block)
 
     block_ptr->max_free = MY_MALLOC_GET_SIZE(max);
     block_ptr->max_free_ptr = max;
-
-    // ALWAYS free the lock in the block here
-    // tihs means this function M U S T be called last,
-    // or alteast in a way that accounts for this
 }
 
 static void*  _block_alloc_unsafe(size_t bytes, void* block)
@@ -846,7 +848,7 @@ static void*  _advanced_malloc(size_t bytes, char search, void* block, _mapping*
     return _advanced_malloc(bytes, search, block, mapping);
 }
 
-void*  my_malloc(size_t bytes)
+void* my_malloc(size_t bytes)
 {
     // allocate bytes somewhere on the heap
     // return pointer to allocated space
@@ -868,7 +870,7 @@ void*  my_malloc(size_t bytes)
     return _advanced_malloc(bytes, 0, block, mapping);
 }
 
-void   my_free(void* ptr)
+void  my_free(void* ptr)
 {
     // set an allocation to be freed
 
