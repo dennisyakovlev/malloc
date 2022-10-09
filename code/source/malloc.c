@@ -202,8 +202,10 @@ typedef struct MallocAdjustables _vars;
 
 #if SIZE_MAX == 0xffffffff
     #define MY_MALLOC_SHIFTER 0x80000000
+    #define MY_MALLOC_NUM_BITS 32
 #elif SIZE_MAX == 0xffffffffffffffff
     #define MY_MALLOC_SHIFTER 0x8000000000000000
+    #define MY_MALLOC_NUM_BITS 64
 #else
     static_assert(0, "not 32 or 64 bit system");
 #endif
@@ -881,4 +883,106 @@ void   my_free(void* ptr)
     _block_update_meta(block);
     
     _block_lock_free(block);
+}
+
+void* my_calloc(size_t num, size_t bytes)
+{
+    // allocate zero'd bytes * num bytes if
+    // the product does not overflow
+
+    // Note: See "Notes" section at start of file
+    //       for zero'ing info
+
+    if (MY_MALLOC_CLZ(num) + MY_MALLOC_CLZ(bytes) < MY_MALLOC_NUM_BITS)
+    {
+        // would overflow
+
+        return NULL;
+    }
+
+    const size_t req_bytes = num * bytes;
+    void* res = my_malloc(req_bytes);
+    memset(res, 0, req_bytes);
+
+    return res;
+}
+
+void* my_realloc(void *ptr, size_t size)
+{
+    /*  we can always shrink
+        check if we can expand the current allocation
+            if yes then return expanded
+        find block with enough room, ie just normal
+        malloc, copy data
+    */
+
+    // can reduce the two ifs down
+
+    void* alloc_meta = (char*)ptr - MY_MALLOC_ALLOC_META;
+    void* block = MY_MALLOC_GET_AVAILABILITY(alloc_meta);
+
+    while (!_block_acquire(0, block))
+    {
+        _wait_short();
+    }
+
+    size_t old_sz = MY_MALLOC_GET_SIZE(alloc_meta);
+
+    if (size <= old_sz)
+    {
+        // shrink current allocation
+
+        size_t diff = old_sz - size;
+        size_t next_old_sz = MY_MALLOC_GET_SIZE(MY_MALLOC_NEXT(alloc_meta));
+
+        MY_MALLOC_SET_SIZE(alloc_meta, size);
+
+        void* next = MY_MALLOC_NEXT(alloc_meta);
+        MY_MALLOC_SET_SIZE(next, next_old_sz + diff);
+        MY_MALLOC_SET_INUSE(next, block);
+
+        _block_update_meta(block);
+
+        _block_lock_free(block);
+
+        return ptr;
+    }
+
+    void* next = MY_MALLOC_NEXT(alloc_meta);
+    if
+    (
+        !MY_MALLOC_GET_AVAILABILITY(next)
+        &&
+        size <= old_sz + MY_MALLOC_GET_SIZE(next)
+    )
+    {
+        // expand current allocation
+
+        size_t next_old_sz = MY_MALLOC_GET_SIZE(MY_MALLOC_NEXT(alloc_meta));
+
+        size_t new_next_sz = (next_old_sz + old_sz) -  size;
+
+        MY_MALLOC_SET_SIZE(alloc_meta, size);
+
+        void* next_new = MY_MALLOC_NEXT(alloc_meta);
+        MY_MALLOC_SET_SIZE(next_new, new_next_sz);
+        MY_MALLOC_SET_INUSE(next_new, block);
+
+        _block_update_meta(block);
+
+        _block_lock_free(block);
+
+        return ptr;
+    }
+
+    // new allocation and copy
+    void* new_ptr = my_malloc(size);
+
+    // do we need block lock on the new?
+    // no since were just copying into an allocation
+    // however we need lock on old block so that
+    // data doesnt get overwritten
+    memcpy(new_ptr, ptr, old_sz);
+
+    return new_ptr;
 }
