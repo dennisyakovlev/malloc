@@ -1,6 +1,6 @@
 # statically link into every test, allowing for easy debugging
 
-DIRS=malloc calloc free-malloc realloc-malloc advanced
+DIRS=malloc calloc free-malloc realloc-malloc multi-thread
 
 all: directory tests 
 

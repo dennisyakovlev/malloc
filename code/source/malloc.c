@@ -911,12 +911,9 @@ void* my_calloc(size_t num, size_t bytes)
 
 void* my_realloc(void *ptr, size_t size)
 {
-    /*  we can always shrink
-        check if we can expand the current allocation
-            if yes then return expanded
-        find block with enough room, ie just normal
-        malloc, copy data
-    */
+    // reallocate previously allocated ptr to
+    // a new size
+    // return pointer to new allocation
 
     // can reduce the two ifs down
 
@@ -928,26 +925,16 @@ void* my_realloc(void *ptr, size_t size)
         _wait_short();
     }
 
-    size_t old_sz = MY_MALLOC_GET_SIZE(alloc_meta);
+    size_t curr_sz = MY_MALLOC_GET_SIZE(alloc_meta), next_new_sz = 0;
 
-    if (size <= old_sz)
+    if (size <= curr_sz)
     {
         // shrink current allocation
 
-        size_t diff = old_sz - size;
-        size_t next_old_sz = MY_MALLOC_GET_SIZE(MY_MALLOC_NEXT(alloc_meta));
+        size_t diff = curr_sz - size;
+        size_t next_curr_sz = MY_MALLOC_GET_SIZE(MY_MALLOC_NEXT(alloc_meta));
 
-        MY_MALLOC_SET_SIZE(alloc_meta, size);
-
-        void* next = MY_MALLOC_NEXT(alloc_meta);
-        MY_MALLOC_SET_SIZE(next, next_old_sz + diff);
-        MY_MALLOC_SET_INUSE(next, block);
-
-        _block_update_meta(block);
-
-        _block_lock_free(block);
-
-        return ptr;
+        next_new_sz = next_curr_sz + diff;
     }
 
     void* next = MY_MALLOC_NEXT(alloc_meta);
@@ -955,19 +942,22 @@ void* my_realloc(void *ptr, size_t size)
     (
         !MY_MALLOC_GET_AVAILABILITY(next)
         &&
-        size <= old_sz + MY_MALLOC_GET_SIZE(next)
+        size <= curr_sz + MY_MALLOC_GET_SIZE(next)
     )
     {
         // expand current allocation
 
-        size_t next_old_sz = MY_MALLOC_GET_SIZE(MY_MALLOC_NEXT(alloc_meta));
+        size_t next_curr_sz = MY_MALLOC_GET_SIZE(MY_MALLOC_NEXT(alloc_meta));
 
-        size_t new_next_sz = (next_old_sz + old_sz) -  size;
+        next_new_sz = (next_curr_sz + curr_sz) -  size;
+    }
 
+    if (next_new_sz)
+    {
         MY_MALLOC_SET_SIZE(alloc_meta, size);
 
         void* next_new = MY_MALLOC_NEXT(alloc_meta);
-        MY_MALLOC_SET_SIZE(next_new, new_next_sz);
+        MY_MALLOC_SET_SIZE(next_new, next_new_sz);
         MY_MALLOC_SET_INUSE(next_new, block);
 
         _block_update_meta(block);
@@ -980,11 +970,9 @@ void* my_realloc(void *ptr, size_t size)
     // new allocation and copy
     void* new_ptr = my_malloc(size);
 
-    // do we need block lock on the new?
-    // no since were just copying into an allocation
-    // however we need lock on old block so that
-    // data doesnt get overwritten
-    memcpy(new_ptr, ptr, old_sz);
+    memcpy(new_ptr, ptr, curr_sz);
 
+    _block_lock_free(block);
+    
     return new_ptr;
 }

@@ -1,4 +1,4 @@
-OBJECTS=basic mix
+OBJECTS=basic mix thourough
 CURRDIR=$(BUILDIR)/tests/free-malloc
 
 all: directory tests

@@ -1,5 +1,5 @@
 OBJECTS=basic mix
-CURRDIR=$(BUILDIR)/tests/multi_thread
+CURRDIR=$(BUILDIR)/tests/multi-thread
 
 all: directory tests
 

@@ -1,7 +1,8 @@
 #!/bin/sh
 
 base_dir=build/tests
-group_order="malloc calloc free-malloc realloc-malloc advanced"
+# group_order="realloc-malloc"
+group_order="malloc calloc free-malloc realloc-malloc multi-thread"
 
 make tests >> /dev/null
 if [ "$?" -ne 0 ]; then
